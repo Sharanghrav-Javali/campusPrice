@@ -1,222 +1,368 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import HeroInput from "./components/HeroInput";
+import UnderstoodPanel from "./components/UnderstoodPanel";
+import ProductCard from "./components/ProductCard";
+import ComparisonDrawer from "./components/ComparisonDrawer";
+import HistoryAndSaved from "./components/HistoryAndSaved";
 
-const VERDICT_CLASS = {
-  "buy now": "tag-buy",
-  "wait": "tag-wait",
-  "overpriced": "tag-overpriced",
-};
-
-function verdictClass(v) {
-  if (!v) return "tag-unknown";
-  const key = v.toLowerCase();
-  return VERDICT_CLASS[key] || "tag-unknown";
-}
+const INITIAL_DISPLAY_LIMIT = 5;
 
 export default function Home() {
-  const [product, setProduct] = useState("");
-  const [budget, setBudget] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [lastParams, setLastParams] = useState(null);
   const [data, setData] = useState(null);
-  const [history, setHistory] = useState([]);
 
+  // Sorting & Filtering
+  const [sortBy, setSortBy] = useState("best_match");
+  const [brandFilter, setBrandFilter] = useState("all");
+  const [displayCount, setDisplayCount] = useState(INITIAL_DISPLAY_LIMIT);
+
+  // Comparison selection
+  const [selectedForCompare, setSelectedForCompare] = useState([]);
+
+  // Local Storage state
+  const [history, setHistory] = useState([]);
+  const [savedProducts, setSavedProducts] = useState([]);
+
+  // Load localStorage on mount
   useEffect(() => {
     try {
-      const saved = JSON.parse(localStorage.getItem("cp_history") || "[]");
-      setHistory(saved);
-    } catch (e) {
-      setHistory([]);
+      const savedHistory = JSON.parse(localStorage.getItem("cp_history") || "[]");
+      setHistory(savedHistory);
+      const savedItems = JSON.parse(localStorage.getItem("cp_saved") || "[]");
+      setSavedProducts(savedItems);
+    } catch {
+      // Ignore localStorage errors
     }
   }, []);
 
-  function saveToHistory(query, result) {
+  function saveSearchToHistory(params, result) {
     try {
+      const topMatchTitle = result.matches?.[0]?.title || result.aboveBudgetAlternatives?.[0]?.title || null;
       const entry = {
-        query,
-        verdict: result.verdict,
-        time: new Date().toLocaleString(),
+        query: params.text || result.requirements?.summary || "Product research",
+        category: result.requirements?.category,
+        budget: result.requirements?.budget?.max,
+        topMatch: topMatchTitle,
+        time: new Date().toLocaleDateString("en-IN", {
+          month: "short",
+          day: "numeric",
+          hour: "2-digit",
+          minute: "2-digit",
+        }),
       };
-      const updated = [entry, ...history].slice(0, 8);
+      const updated = [entry, ...history.filter((h) => h.query !== entry.query)].slice(0, 10);
       setHistory(updated);
       localStorage.setItem("cp_history", JSON.stringify(updated));
-    } catch (e) {
-      // localStorage unavailable, skip silently
+    } catch {
+      // Ignore
     }
   }
 
-  async function handleSubmit(e) {
-    e.preventDefault();
-    if (!product.trim()) {
-      setError("Type a product name first — e.g. 'boAt Rockerz 450 headphones'");
-      return;
-    }
-    setError("");
-    setData(null);
-    setLoading(true);
+  function handleToggleSave(product) {
     try {
-      const res = await fetch("/api/analyze", {
+      let updated;
+      const exists = savedProducts.some((p) => p.id === product.id);
+      if (exists) {
+        updated = savedProducts.filter((p) => p.id !== product.id);
+      } else {
+        updated = [product, ...savedProducts];
+      }
+      setSavedProducts(updated);
+      localStorage.setItem("cp_saved", JSON.stringify(updated));
+    } catch {
+      // Ignore
+    }
+  }
+
+  function handleToggleCompare(product) {
+    setSelectedForCompare((prev) => {
+      const exists = prev.some((p) => p.id === product.id);
+      if (exists) {
+        return prev.filter((p) => p.id !== product.id);
+      }
+      if (prev.length >= 4) {
+        alert("You can compare up to 4 products at a time.");
+        return prev;
+      }
+      return [...prev, product];
+    });
+  }
+
+  async function executeResearch(payload) {
+    setError("");
+    setLoading(true);
+    setDisplayCount(INITIAL_DISPLAY_LIMIT);
+    setSelectedForCompare([]);
+    setLastParams(payload);
+
+    try {
+      const res = await fetch("/api/research", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ product, budget }),
+        body: JSON.stringify(payload),
       });
+
       const json = await res.json();
       if (!res.ok) {
-        throw new Error(json.error || "Something went wrong. Try again.");
+        throw new Error(json.error || "We couldn't complete the market search right now. Please try again.");
       }
+
       setData(json);
-      saveToHistory(product, json);
+      saveSearchToHistory(payload, json);
     } catch (err) {
-      setError(err.message || "Something went wrong. Try again.");
+      setError(err.message || "An unexpected error occurred. Please check your connection and try again.");
     } finally {
       setLoading(false);
     }
   }
 
+  // Handle re-researching when user edits requirements in UnderstoodPanel
+  function handleUpdateRequirements(editedRequirements) {
+    executeResearch({ requirements: editedRequirements });
+  }
+
+  // Sorting & Filtering logic
+  const rawMatches = data?.matches || [];
+  const uniqueBrands = Array.from(new Set(rawMatches.map((m) => m.brand).filter(Boolean)));
+
+  let filteredMatches = rawMatches.filter((m) => {
+    if (brandFilter === "all") return true;
+    return m.brand?.toLowerCase() === brandFilter.toLowerCase();
+  });
+
+  const rankWeight = {
+    "Excellent match": 4,
+    "Strong match": 3,
+    "Partial match": 2,
+    "Poor match": 1,
+  };
+
+  filteredMatches.sort((a, b) => {
+    if (sortBy === "best_match") {
+      const diff = (rankWeight[b.matchClassification] || 2) - (rankWeight[a.matchClassification] || 2);
+      if (diff !== 0) return diff;
+      return (a.observedPrice || 999999) - (b.observedPrice || 999999);
+    }
+    if (sortBy === "lowest_price") {
+      return (a.observedPrice || 999999) - (b.observedPrice || 999999);
+    }
+    if (sortBy === "highest_price") {
+      return (b.observedPrice || 0) - (a.observedPrice || 0);
+    }
+    return 0;
+  });
+
+  const visibleMatches = filteredMatches.slice(0, displayCount);
+
   return (
-    <div className="wrap">
-      <header className="hero">
-        <span className="badge">Built for students · Free to run</span>
-        <h1>CampusPrice</h1>
-        <p>
-          Paste any product you're thinking of buying. Get an instant AI
-          comparison across sources, a buy/wait verdict, and things sellers
-          won't tell you.
-        </p>
-      </header>
+    <div className="app-layout">
+      {/* Top Navbar */}
+      <nav className="navbar" aria-label="Main Navigation">
+        <div className="nav-container">
+          <div className="nav-logo">
+            <span className="logo-symbol">₹</span>
+            <span className="logo-text">Campus<strong>Price</strong></span>
+            <span className="nav-tag">Research Workstation</span>
+          </div>
 
-      <form className="search-form" onSubmit={handleSubmit}>
-        <input
-          type="text"
-          placeholder="What are you buying? e.g. 'Redmi Note 13 5G 128GB'"
-          value={product}
-          onChange={(e) => setProduct(e.target.value)}
+          <div className="nav-links">
+            <span className="nav-pill-info">Zero ads · Indian Market · Free</span>
+          </div>
+        </div>
+      </nav>
+
+      <main className="main-content">
+        {/* Hero Natural Language Input */}
+        <HeroInput onSearch={executeResearch} loading={loading} />
+
+        {/* Error Notification with Retry */}
+        {error && (
+          <div className="error-banner" role="alert">
+            <div className="error-banner-content">
+              <span className="error-icon">⚠️</span>
+              <div>
+                <strong>Research Notice</strong>
+                <p>{error}</p>
+              </div>
+            </div>
+            {lastParams && (
+              <button
+                type="button"
+                className="btn-retry"
+                onClick={() => executeResearch(lastParams)}
+                disabled={loading}
+              >
+                Try Again ↺
+              </button>
+            )}
+          </div>
+        )}
+
+        {/* Research Results Workspace */}
+        {data && (
+          <section className="results-workspace" aria-label="Research Results">
+            {/* 1. What We Understood Panel */}
+            <UnderstoodPanel
+              requirements={data.requirements}
+              onUpdateRequirements={handleUpdateRequirements}
+              loading={loading}
+            />
+
+            {/* Market Summary Card */}
+            {data.marketSummary && (
+              <div className="market-summary-card">
+                <div className="summary-badge">Live Market Digest</div>
+                <p className="summary-text">{data.marketSummary}</p>
+              </div>
+            )}
+
+            {/* Budget Notice Banner if any */}
+            {data.budgetNotice && (
+              <div className="budget-notice-card" role="note">
+                <span className="budget-notice-icon">ℹ️</span>
+                <p>{data.budgetNotice}</p>
+              </div>
+            )}
+
+            {/* Results Filter & Sort Bar */}
+            <div className="results-control-bar">
+              <div className="results-counter">
+                <h3>Recommended Matches</h3>
+                <span className="counter-text">
+                  Showing {visibleMatches.length} of {filteredMatches.length} products
+                  {data.latencyMs ? ` (researched in ${(data.latencyMs / 1000).toFixed(1)}s)` : ""}
+                </span>
+              </div>
+
+              <div className="filters-row">
+                {uniqueBrands.length > 0 && (
+                  <div className="filter-select-wrap">
+                    <label htmlFor="brand-filter">Brand:</label>
+                    <select
+                      id="brand-filter"
+                      value={brandFilter}
+                      onChange={(e) => setBrandFilter(e.target.value)}
+                    >
+                      <option value="all">All Brands ({rawMatches.length})</option>
+                      {uniqueBrands.map((b) => (
+                        <option key={b} value={b}>{b}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+
+                <div className="filter-select-wrap">
+                  <label htmlFor="sort-select">Sort by:</label>
+                  <select
+                    id="sort-select"
+                    value={sortBy}
+                    onChange={(e) => setSortBy(e.target.value)}
+                  >
+                    <option value="best_match">Best Requirement Fit</option>
+                    <option value="lowest_price">Lowest Observed Price</option>
+                    <option value="highest_price">Highest Price</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+
+            {/* Product Cards Grid */}
+            <div className="products-stack">
+              {visibleMatches.map((product) => (
+                <ProductCard
+                  key={product.id}
+                  product={product}
+                  category={data.requirements?.category}
+                  isSelectedForCompare={selectedForCompare.some((p) => p.id === product.id)}
+                  onToggleCompare={handleToggleCompare}
+                  isSaved={savedProducts.some((p) => p.id === product.id)}
+                  onToggleSave={handleToggleSave}
+                />
+              ))}
+            </div>
+
+            {/* Show More Button */}
+            {filteredMatches.length > displayCount && (
+              <div className="show-more-wrap">
+                <button
+                  type="button"
+                  className="btn-show-more"
+                  onClick={() => setDisplayCount((prev) => prev + 5)}
+                >
+                  Show More Products ({filteredMatches.length - displayCount} remaining) ▾
+                </button>
+              </div>
+            )}
+
+            {/* Above-Budget Alternatives Section */}
+            {data.aboveBudgetAlternatives && data.aboveBudgetAlternatives.length > 0 && (
+              <div className="above-budget-section">
+                <div className="above-budget-header">
+                  <span className="above-budget-tag">Budget Extension</span>
+                  <h4>Closest Alternatives Above Budget</h4>
+                  <p>
+                    These options exceed your specified budget ceiling of ₹
+                    {data.requirements?.budget?.max?.toLocaleString("en-IN")}, but offer strong requirement alignment.
+                  </p>
+                </div>
+
+                <div className="products-stack">
+                  {data.aboveBudgetAlternatives.map((product) => (
+                    <ProductCard
+                      key={product.id}
+                      product={product}
+                      category={data.requirements?.category}
+                      isSelectedForCompare={selectedForCompare.some((p) => p.id === product.id)}
+                      onToggleCompare={handleToggleCompare}
+                      isSaved={savedProducts.some((p) => p.id === product.id)}
+                      onToggleSave={handleToggleSave}
+                    />
+                  ))}
+                </div>
+              </div>
+            )}
+          </section>
+        )}
+
+        {/* History and Saved Bookmarks */}
+        <HistoryAndSaved
+          history={history}
+          savedProducts={savedProducts}
+          onSelectHistory={(item) => executeResearch({ text: item.query })}
+          onClearHistory={() => {
+            setHistory([]);
+            localStorage.removeItem("cp_history");
+          }}
+          onRemoveSaved={(id) => {
+            const updated = savedProducts.filter((p) => p.id !== id);
+            setSavedProducts(updated);
+            localStorage.setItem("cp_saved", JSON.stringify(updated));
+          }}
         />
-        <div className="row">
-          <input
-            type="number"
-            placeholder="Your budget in ₹ (optional)"
-            value={budget}
-            onChange={(e) => setBudget(e.target.value)}
-          />
-          <button type="submit" className="primary" disabled={loading}>
-            {loading ? "Researching…" : "Get the verdict"}
-          </button>
+      </main>
+
+      {/* Floating Comparison Drawer & Modal */}
+      <ComparisonDrawer
+        selectedProducts={selectedForCompare}
+        category={data?.requirements?.category || "generic"}
+        onClearSelection={() => setSelectedForCompare([])}
+        onRemoveProduct={(id) => setSelectedForCompare((prev) => prev.filter((p) => p.id !== id))}
+      />
+
+      <footer className="footer-site">
+        <div className="footer-content">
+          <p>
+            <strong>CampusPrice</strong> — AI shopping research workstation for students.
+            Prices and specifications reflect live observed data from retailer web pages.
+          </p>
+          <p className="footer-disclaimer">
+            Always confirm availability, warranties, and prices directly with the merchant before purchasing.
+          </p>
         </div>
-      </form>
-
-      {error && <div className="error-box">{error}</div>}
-
-      {loading && (
-        <div className="loading-box">
-          Searching the web and comparing prices — this takes 5–15 seconds…
-        </div>
-      )}
-
-      {data && (
-        <div className="result">
-          <div className="card">
-            <div className="verdict">
-              <span className={`verdict-tag ${verdictClass(data.verdict)}`}>
-                {data.verdict || "Unclear"}
-              </span>
-              <strong>{data.product || product}</strong>
-            </div>
-            <p className="summary">{data.summary}</p>
-          </div>
-
-          {data.comparisons && data.comparisons.length > 0 && (
-            <div className="card">
-              <h3 className="card-title">Price comparison</h3>
-              <table className="compare">
-                <thead>
-                  <tr>
-                    <th>Source</th>
-                    <th>Price</th>
-                    <th>Notes</th>
-                    <th></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.comparisons.map((c, i) => (
-                    <tr key={i}>
-                      <td>
-                        {c.source}
-                        {data.best_price &&
-                          c.source === data.best_price.source && (
-                            <span className="best-pill">BEST</span>
-                          )}
-                      </td>
-                      <td>{c.price || "—"}</td>
-                      <td>{c.notes || ""}</td>
-                      <td>
-                        {c.link && (
-                          <a href={c.link} target="_blank" rel="noreferrer">
-                            View →
-                          </a>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-
-          <div className="two-col">
-            {data.pros && data.pros.length > 0 && (
-              <div className="card">
-                <h3 className="card-title">Pros</h3>
-                <ul className="plain pros">
-                  {data.pros.map((p, i) => (
-                    <li key={i}>{p}</li>
-                  ))}
-                </ul>
-              </div>
-            )}
-            {data.cons && data.cons.length > 0 && (
-              <div className="card">
-                <h3 className="card-title">Cons / watch out for</h3>
-                <ul className="plain cons">
-                  {data.cons.map((c, i) => (
-                    <li key={i}>{c}</li>
-                  ))}
-                </ul>
-              </div>
-            )}
-          </div>
-
-          {data.tips && (
-            <div className="card">
-              <h3 className="card-title">Buying tip</h3>
-              <div className="tips-box">{data.tips}</div>
-            </div>
-          )}
-        </div>
-      )}
-
-      {history.length > 0 && (
-        <div className="history">
-          <h4>Recent searches (saved on this device only)</h4>
-          {history.map((h, i) => (
-            <div
-              className="history-item"
-              key={i}
-              onClick={() => setProduct(h.query)}
-            >
-              <span>{h.query}</span>
-              <span style={{ color: "var(--text-dim)", fontSize: 12 }}>
-                {h.verdict} · {h.time}
-              </span>
-            </div>
-          ))}
-        </div>
-      )}
-
-      <footer className="foot">
-        CampusPrice — a student-built project. Always verify final prices on
-        the retailer's site before buying.
       </footer>
     </div>
   );

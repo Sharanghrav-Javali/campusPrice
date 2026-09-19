@@ -107,14 +107,18 @@ export default function HistoryAndSaved({
                       </div>
                     </div>
                     <div className="saved-item-actions">
-                      <a
-                        href={p.url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="btn-view-link"
-                      >
-                        View ↗
-                      </a>
+                      {p.url ? (
+                        <a
+                          href={p.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="btn-view-link"
+                        >
+                          View ↗
+                        </a>
+                      ) : (
+                        <span className="btn-view-link-disabled">Unavailable</span>
+                      )}
                       <button
                         type="button"
                         className="btn-remove-saved"

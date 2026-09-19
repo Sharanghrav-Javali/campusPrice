@@ -6,10 +6,13 @@ import { searchProducts } from "@/lib/searchEngine";
 import { normalizeAndDeduplicate } from "@/lib/productNormalizer";
 import { matchRequirementsToProducts } from "@/lib/requirementMatcher";
 import { getCategoryConfig } from "@/lib/categories";
+import { provenance } from "@/lib/debugProvenance";
 import { logger } from "@/lib/logger";
 
 export async function POST(req) {
   const startTime = Date.now();
+  const traceId = `trace_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+
   try {
     const ip = getClientIp(req);
     const rateCheck = checkRateLimit(ip, { limit: 12, windowMs: 60 * 1000 });
@@ -40,7 +43,11 @@ export async function POST(req) {
       });
     }
 
-    // Phase 2: Multi-Query Search
+    provenance.createTrace(traceId, {
+      userRequest: requirements.raw_query || text,
+    });
+
+    // Phase 2: Multi-Query Search with Verified Product Page URLs
     let rawCandidates = [];
     try {
       rawCandidates = await searchProducts(requirements);
@@ -55,6 +62,8 @@ export async function POST(req) {
       );
     }
 
+    provenance.recordRawResults(traceId, rawCandidates);
+
     if (rawCandidates.length === 0) {
       return NextResponse.json({
         requirements,
@@ -68,11 +77,11 @@ export async function POST(req) {
       });
     }
 
-    // Phase 3: Normalization & Deduplication
+    // Phase 3: Exact Configuration Normalization & Deduplication
     const normalized = normalizeAndDeduplicate(rawCandidates);
 
-    // Phase 4: Requirement Matching & Classification
-    const evaluation = await matchRequirementsToProducts(requirements, normalized);
+    // Phase 4: Requirement Matching & Immutable URL Binding
+    const evaluation = await matchRequirementsToProducts(requirements, normalized, { traceId });
 
     const categoryConfig = getCategoryConfig(requirements.category);
 
@@ -84,7 +93,7 @@ export async function POST(req) {
       latencyMs: Date.now() - startTime,
     });
 
-    return NextResponse.json({
+    const responsePayload = {
       requirements,
       category: categoryConfig,
       marketSummary: evaluation.marketSummary,
@@ -93,7 +102,17 @@ export async function POST(req) {
       budgetNotice: evaluation.budgetNotice,
       totalFound: normalized.length,
       latencyMs: Date.now() - startTime,
-    });
+    };
+
+    // Dev-only debug provenance trace (never included in production)
+    if (process.env.NODE_ENV !== "production") {
+      const url = new URL(req.url);
+      if (url.searchParams.get("debug") === "1" || body.debug === true) {
+        responsePayload._debugProvenance = provenance.getTrace(traceId);
+      }
+    }
+
+    return NextResponse.json(responsePayload);
   } catch (err) {
     logger.error("research_pipeline_fatal", err);
     return NextResponse.json(

@@ -112,14 +112,20 @@ export default function ComparisonDrawer({
                       <th key={p.id} className="product-col-header">
                         <div className="th-title">{p.title}</div>
                         <div className="th-retailer">on {p.retailer}</div>
-                        <a
-                          href={p.url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="th-visit-btn"
-                        >
-                          View ↗
-                        </a>
+                        {p.urlVerified && p.url ? (
+                          <a
+                            href={p.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="th-visit-btn"
+                          >
+                            View ↗
+                          </a>
+                        ) : (
+                          <span className="th-no-link" title="Product link unavailable">
+                            Link unavailable
+                          </span>
+                        )}
                       </th>
                     ))}
                   </tr>

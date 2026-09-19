@@ -58,8 +58,8 @@ User Natural-Language Description (Paragraph + Optional Overrides)
 - `lib/searchEngine.js`: Multi-query planner and Serper execution across Indian retailers.
 - `lib/productNormalizer.js`: Deduplication engine grouping identical models while keeping hardware configurations distinct.
 - `lib/requirementMatcher.js`: Evaluates candidate products against user requirements, strictly grounding claims in retrieved evidence.
-- `lib/rateLimit.js`: In-memory sliding window rate limiter per client IP.
-- `lib/security.js`: Input sanitization, prompt injection isolation via XML delimiters, and URL verification.
+- `lib/urlValidator.js`: URL syntax validation, domain reputation, product-detail vs search/category page quality scoring, and safe parameter normalization.
+- `lib/debugProvenance.js`: Development-only provenance tracking tracing user queries to exact search result IDs and verified final URLs.
 - `lib/logger.js`: Structured latency and error logging with automated secret redaction.
 
 ---
@@ -127,7 +127,12 @@ npm start
 1. **Prompt Injection Protection**: Untrusted text scraped from external web search results is isolated inside strict `<untrusted_product_evidence>` XML delimiters. Webpage snippets cannot alter system instructions.
 2. **Anti-Hallucination Guard**: The matching engine is instructed never to invent specifications or warranties. When an attribute is unverified in search snippets, it is explicitly labeled: `"Not available in source"`.
 3. **Budget Guardrail**: If user specifies a budget ceiling, products exceeding that ceiling are categorized as *"Above-budget alternatives"* with explicit delta calculation (`+₹X above budget`), never masquerading as within-budget recommendations.
-4. **URL Sanitation**: All external merchant links are validated for safe `http:` and `https:` protocols before rendering.
+4. **URL Provenance & Accuracy**:
+   - **Zero LLM URLs**: The LLM is architecturally forbidden from generating, guessing, or constructing URLs. It references candidates strictly by `candidate_id`.
+   - **Immutable Source URLs**: URLs originate exclusively from verified Serper search result objects (`sourceUrl`).
+   - **Product vs Search/Category Page Filter**: Heuristic quality scorer filters out category browse pages (`amazon.in/b?`, `flipkart.com/search`), blog reviews, and listicles.
+   - **Atomic Offer Model**: Price, retailer, and URL are bound as an indivisible unit (`{ retailer, price, url, urlVerified }`). Price from one seller is never mixed with the URL of another.
+   - **No Fake Fallback Links**: If a direct product page cannot be verified, the UI displays *"Product link unavailable"* rather than inventing fake Google or Amazon search links.
 5. **Rate Limiting**: Built-in sliding-window limiter rejects excessive requests with `429 Too Many Requests` to protect free API quotas.
 
 ---

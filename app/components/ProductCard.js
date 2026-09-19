@@ -20,12 +20,18 @@ export default function ProductCard({
   onToggleSave,
 }) {
   const [showAllSpecs, setShowAllSpecs] = useState(false);
-  const [showSources, setShowSources] = useState(false);
+  const [showOtherOffers, setShowOtherOffers] = useState(false);
 
   const badgeKey = (product.matchClassification || "").toLowerCase();
   const badgeClass = MATCH_BADGE_CLASSES[badgeKey] || "match-tag-partial";
 
   const comparisonAttrs = getComparisonAttributes(category);
+  const hasVerifiedUrl = Boolean(product.urlVerified && product.url);
+
+  // Other seller offers excluding the primary offer
+  const otherOffers = (product.offers || []).filter(
+    (o) => o.url !== product.url && o.retailer !== product.retailer
+  );
 
   return (
     <article className={`product-card ${isSelectedForCompare ? "selected-card" : ""}`}>
@@ -35,6 +41,11 @@ export default function ProductCard({
           <span className={`match-badge ${badgeClass}`}>
             {product.matchClassification}
           </span>
+          {hasVerifiedUrl && (
+            <span className="badge-source-verified" title="Direct product page verified from search results">
+              ✓ Source verified
+            </span>
+          )}
           {product.budgetDelta && (
             <span className="budget-delta-pill">{product.budgetDelta}</span>
           )}
@@ -164,48 +175,59 @@ export default function ProductCard({
             )}
           </div>
 
-          {/* Card Footer: View external button & Sources link */}
-          <div className="card-footer">
-            <div className="sources-collapsible">
+          {/* Other Verified Sellers (Multi-Retailer) */}
+          {otherOffers.length > 0 && (
+            <div className="other-offers-section">
               <button
                 type="button"
-                className="btn-sources-link"
-                onClick={() => setShowSources(!showSources)}
+                className="btn-other-offers-toggle"
+                onClick={() => setShowOtherOffers(!showOtherOffers)}
               >
-                {showSources ? "Hide verified sources" : `Sources (${product.sources?.length || 1}) ▾`}
+                {showOtherOffers
+                  ? "▲ Hide other sellers"
+                  : `▼ Other verified sellers (${otherOffers.length})`}
               </button>
 
-              {showSources && (
-                <div className="sources-dropdown">
-                  {product.sources && product.sources.length > 0 ? (
-                    product.sources.map((s, i) => (
-                      <div key={i} className="source-row">
-                        <span>{s.retailer}: {s.priceFormatted || "Listing"}</span>
-                        <a href={s.link} target="_blank" rel="noopener noreferrer">
-                          Visit link ↗
-                        </a>
-                      </div>
-                    ))
-                  ) : (
-                    <div className="source-row">
-                      <span>{product.retailer}</span>
-                      <a href={product.url} target="_blank" rel="noopener noreferrer">
-                        Visit listing ↗
+              {showOtherOffers && (
+                <div className="other-offers-list">
+                  {otherOffers.map((o, idx) => (
+                    <div key={idx} className="other-offer-row">
+                      <span className="offer-retailer-badge">{o.retailer}</span>
+                      <span className="offer-price">{o.priceFormatted}</span>
+                      <a
+                        href={o.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="btn-offer-link"
+                      >
+                        View on {o.retailer} ↗
                       </a>
                     </div>
-                  )}
+                  ))}
                 </div>
               )}
             </div>
+          )}
 
-            <a
-              href={product.url}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="btn-view-product"
-            >
-              View on {product.retailer} ↗
-            </a>
+          {/* Card Footer: Verified Link Action */}
+          <div className="card-footer">
+            {hasVerifiedUrl ? (
+              <a
+                href={product.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="btn-view-product"
+              >
+                View on {product.retailer} ↗
+              </a>
+            ) : (
+              <div className="link-unavailable-box">
+                <span className="btn-view-unavailable">Product link unavailable</span>
+                <p className="unavailable-explanation">
+                  We found the product information but couldn't verify a direct product page.
+                </p>
+              </div>
+            )}
           </div>
         </div>
       </div>
